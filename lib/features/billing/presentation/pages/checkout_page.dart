@@ -15,6 +15,8 @@ class CheckoutPage extends StatefulWidget {
 }
 
 class _CheckoutPageState extends State<CheckoutPage> {
+  bool _printDone = false;
+
   @override
   Widget build(BuildContext context) {
     const borderColor = Color(0xFFE5E5EA);
@@ -44,12 +46,16 @@ class _CheckoutPageState extends State<CheckoutPage> {
           ),
           body: BlocConsumer<BillingBloc, BillingState>(
             listener: (context, state) {
-              if (state.printSuccess) {
+              if (state.printSuccess && !_printDone) {
+                setState(() => _printDone = true);
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text('Printed successfully'),
+                    content: Text('Receipt printed successfully ✓'),
                     backgroundColor: Colors.green));
-                // context.read<BillingBloc>().add(ClearCartEvent());
-                // context.go('/');
+              }
+              if (state.error != null) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(state.error!),
+                    backgroundColor: Colors.red));
               }
             },
             builder: (context, billingState) {
@@ -71,7 +77,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
                             horizontal: 16, vertical: 16),
                         child: Column(
                           children: [
-                            // Table
+                            // Order table
                             Container(
                               decoration: BoxDecoration(
                                 color: Colors.white,
@@ -79,7 +85,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
                                 border: Border.all(color: borderColor),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.05),
+                                    color: Colors.black
+                                        .withValues(alpha: 0.05),
                                     blurRadius: 12,
                                     offset: const Offset(0, 4),
                                   )
@@ -99,12 +106,13 @@ class _CheckoutPageState extends State<CheckoutPage> {
                                       decoration: const BoxDecoration(
                                         color: Color(0xFFF8FAFC),
                                         border: Border(
-                                            bottom:
-                                                BorderSide(color: borderColor)),
+                                            bottom: BorderSide(
+                                                color: borderColor)),
                                       ),
                                       children: [
                                         _buildHeaderCell(
-                                            'Product Name', TextAlign.left),
+                                            'Product Name',
+                                            TextAlign.left),
                                         _buildHeaderCell(
                                             'Price', TextAlign.right),
                                         _buildHeaderCell(
@@ -135,9 +143,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
                               ),
                             ),
                             const SizedBox(height: 24),
-
-                            const SizedBox(
-                                height: 120), // padding for bottom fixed bar
+                            const SizedBox(height: 120),
                           ],
                         ),
                       ),
@@ -167,9 +173,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
                             ),
                             child: Column(
                               children: [
-                                const SizedBox(
-                                  height: 8,
-                                ),
+                                const SizedBox(height: 8),
                                 upiId.isNotEmpty
                                     ? Column(
                                         children: [
@@ -208,42 +212,140 @@ class _CheckoutPageState extends State<CheckoutPage> {
                                         letterSpacing: 1.2,
                                       ),
                                     ),
-                                    Text(
-                                      '₹${billingState.totalAmount.toStringAsFixed(2)}',
-                                      style: const TextStyle(
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.bold,
-                                        letterSpacing: -0.5,
-                                        color: Color(0xFF0F172A),
-                                      ),
+                                    TweenAnimationBuilder<double>(
+                                      tween: Tween<double>(
+                                          begin: 0,
+                                          end: billingState.totalAmount),
+                                      duration: const Duration(
+                                          milliseconds: 400),
+                                      curve: Curves.easeOut,
+                                      builder: (context, value, _) {
+                                        return Text(
+                                          '₹${value.toStringAsFixed(2)}',
+                                          style: const TextStyle(
+                                            fontSize: 24,
+                                            fontWeight: FontWeight.bold,
+                                            letterSpacing: -0.5,
+                                            color: Color(0xFF0F172A),
+                                          ),
+                                        );
+                                      },
                                     ),
                                   ],
                                 ),
                               ],
                             ),
                           ),
-                          PrimaryButton(
-                            onPressed: () {
-                              if (shopState is ShopLoaded) {
-                                context.read<BillingBloc>().add(
-                                    PrintReceiptEvent(
-                                        shopName: shopState.shop.name,
-                                        address1: shopState.shop.addressLine1,
-                                        address2: shopState.shop.addressLine2,
-                                        phone: shopState.shop.phoneNumber,
-                                        footer: shopState.shop.footerText));
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content:
-                                            Text('Shop details not loaded'),
-                                        backgroundColor: Colors.red));
-                              }
-                            },
-                            label: 'Print Receipt',
-                            icon: Icons.print,
-                            isLoading: billingState.isPrinting,
-                          ),
+
+                          // Action buttons
+                          if (_printDone)
+                            Padding(
+                              padding: const EdgeInsets.all(24.0),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: () {
+                                        context
+                                            .read<BillingBloc>()
+                                            .add(PrintReceiptEvent(
+                                              shopName: shopState
+                                                      is ShopLoaded
+                                                  ? shopState.shop.name
+                                                  : '',
+                                              address1: shopState
+                                                      is ShopLoaded
+                                                  ? shopState
+                                                      .shop.addressLine1
+                                                  : '',
+                                              address2: shopState
+                                                      is ShopLoaded
+                                                  ? shopState
+                                                      .shop.addressLine2
+                                                  : '',
+                                              phone: shopState
+                                                      is ShopLoaded
+                                                  ? shopState
+                                                      .shop.phoneNumber
+                                                  : '',
+                                              footer: shopState
+                                                      is ShopLoaded
+                                                  ? shopState
+                                                      .shop.footerText
+                                                  : '',
+                                            ));
+                                        setState(
+                                            () => _printDone = false);
+                                      },
+                                      icon:
+                                          const Icon(Icons.print_outlined),
+                                      label: const Text('Reprint'),
+                                      style: OutlinedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 14),
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(16)),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    flex: 2,
+                                    child: ElevatedButton.icon(
+                                      onPressed: () {
+                                        context
+                                            .read<BillingBloc>()
+                                            .add(ClearCartEvent());
+                                        context.go('/');
+                                      },
+                                      icon: const Icon(
+                                          Icons.add_shopping_cart),
+                                      label:
+                                          const Text('New Sale'),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor:
+                                            Colors.green[600],
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 14),
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(16)),
+                                        elevation: 4,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else
+                            PrimaryButton(
+                              onPressed: () {
+                                if (shopState is ShopLoaded) {
+                                  context.read<BillingBloc>().add(
+                                      PrintReceiptEvent(
+                                          shopName: shopState.shop.name,
+                                          address1:
+                                              shopState.shop.addressLine1,
+                                          address2:
+                                              shopState.shop.addressLine2,
+                                          phone:
+                                              shopState.shop.phoneNumber,
+                                          footer:
+                                              shopState.shop.footerText));
+                                } else {
+                                  ScaffoldMessenger.of(context)
+                                      .showSnackBar(const SnackBar(
+                                          content: Text(
+                                              'Shop details not loaded'),
+                                          backgroundColor: Colors.red));
+                                }
+                              },
+                              label: 'Print Receipt',
+                              icon: Icons.print,
+                              isLoading: billingState.isPrinting,
+                            ),
                         ],
                       ),
                     ),
