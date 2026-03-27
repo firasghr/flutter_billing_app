@@ -20,6 +20,11 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage>
     with TickerProviderStateMixin {
+  // ─── Scan-box dimensions (must match the scrim cutout) ───────────────────
+  static const double _kScanBoxWidth = 240.0;
+  static const double _kScanBoxHeight = 160.0;
+  static const double _kScanLineHeight = 2.0;
+
   final MobileScannerController _scannerController = MobileScannerController(
     detectionSpeed: DetectionSpeed.normal,
     returnImage: false,
@@ -249,8 +254,8 @@ class _HomePageState extends State<HomePage>
           if (_isCameraOn)
             Center(
               child: SizedBox(
-                width: 240,
-                height: 160,
+                width: _kScanBoxWidth,
+                height: _kScanBoxHeight,
                 child: Stack(
                   children: [
                     // Corners
@@ -264,11 +269,12 @@ class _HomePageState extends State<HomePage>
                       animation: _scanLineController,
                       builder: (context, _) {
                         return Positioned(
-                          top: _scanLineController.value * 156,
+                          top: _scanLineController.value *
+                              (_kScanBoxHeight - _kScanLineHeight),
                           left: 8,
                           right: 8,
                           child: Container(
-                            height: 2,
+                            height: _kScanLineHeight,
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
                                 colors: [
@@ -300,11 +306,10 @@ class _HomePageState extends State<HomePage>
 
   /// Semi-transparent dark scrim that surrounds (but doesn't cover) the scan box.
   Widget _buildScannerScrim() {
-    const boxW = 240.0;
-    const boxH = 160.0;
     return IgnorePointer(
       child: CustomPaint(
-        painter: _ScannerOverlayPainter(boxWidth: boxW, boxHeight: boxH),
+        painter: _ScannerOverlayPainter(
+            boxWidth: _kScanBoxWidth, boxHeight: _kScanBoxHeight),
         child: const SizedBox.expand(),
       ),
     );
