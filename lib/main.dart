@@ -37,6 +37,8 @@ class MyApp extends StatelessWidget {
       child: MaterialApp.router(
         title: 'Billing App',
         theme: AppTheme.lightTheme,
+        darkTheme: AppTheme.darkTheme,
+        themeMode: ThemeMode.system,
         routerConfig: router,
         debugShowCheckedModeBanner: false,
       ),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
@@ -16,7 +18,8 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage>
+    with TickerProviderStateMixin {
   final MobileScannerController _scannerController = MobileScannerController(
     detectionSpeed: DetectionSpeed.normal,
     returnImage: false,
@@ -28,8 +31,42 @@ class _HomePageState extends State<HomePage> {
   // Cooldown mapping to prevent rapid firing of the same barcode
   final Map<String, DateTime> _lastScanTimes = {};
 
+  // Animation: scan line inside the bounding box
+  late final AnimationController _scanLineController;
+
+  // Animation: green flash overlay on successful scan
+  late final AnimationController _flashController;
+  late final Animation<double> _flashAnimation;
+
+  // Track the most recently scanned product for highlight animation
+  String? _recentlyAddedId;
+  Timer? _recentlyAddedTimer;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _scanLineController = AnimationController(
+      duration: const Duration(milliseconds: 2000),
+      vsync: this,
+    )..repeat();
+
+    _flashController = AnimationController(
+      duration: const Duration(milliseconds: 500),
+      vsync: this,
+      value: 1.0, // Start fully transparent (ReverseAnimation: 1 − 1 = 0)
+    );
+    _flashAnimation = CurvedAnimation(
+      parent: _flashController,
+      curve: Curves.easeOut,
+    );
+  }
+
   @override
   void dispose() {
+    _scanLineController.dispose();
+    _flashController.dispose();
+    _recentlyAddedTimer?.cancel();
     _scannerController.dispose();
     super.dispose();
   }
@@ -42,10 +79,10 @@ class _HomePageState extends State<HomePage> {
       if (barcode.rawValue != null) {
         final rawValue = barcode.rawValue!;
 
-        // Cooldown logic: 2 seconds per identical barcode
+        // Cooldown logic: 1.5 seconds per identical barcode
         if (_lastScanTimes.containsKey(rawValue)) {
           final lastScan = _lastScanTimes[rawValue]!;
-          if (now.difference(lastScan).inSeconds < 2) {
+          if (now.difference(lastScan).inMilliseconds < 1500) {
             continue;
           }
         }
@@ -55,7 +92,7 @@ class _HomePageState extends State<HomePage> {
         // Vibrate
         final hasVibrator = await Vibration.hasVibrator();
         if (hasVibrator == true) {
-          Vibration.vibrate();
+          Vibration.vibrate(duration: 80);
         }
 
         if (mounted) {
@@ -69,23 +106,43 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: BlocListener<BillingBloc, BillingState>(
-        listenWhen: (previous, current) =>
-            previous.error != current.error && current.error != null,
-        listener: (context, state) {
-          if (state.error != null) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(state.error!),
-                backgroundColor: Colors.red,
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
-        },
+      body: MultiBlocListener(
+        listeners: [
+          BlocListener<BillingBloc, BillingState>(
+            listenWhen: (previous, current) =>
+                previous.error != current.error && current.error != null,
+            listener: (context, state) {
+              if (state.error != null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(state.error!),
+                    backgroundColor: Colors.red,
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            },
+          ),
+          BlocListener<BillingBloc, BillingState>(
+            listenWhen: (previous, current) =>
+                previous.lastAddedProductId != current.lastAddedProductId &&
+                current.lastAddedProductId != null,
+            listener: (context, state) {
+              // Trigger scan flash
+              _flashController.forward(from: 0.0);
+              // Highlight recently added item for 1.5 s
+              setState(() => _recentlyAddedId = state.lastAddedProductId);
+              _recentlyAddedTimer?.cancel();
+              _recentlyAddedTimer =
+                  Timer(const Duration(milliseconds: 1500), () {
+                if (mounted) setState(() => _recentlyAddedId = null);
+              });
+            },
+          ),
+        ],
         child: Stack(
           children: [
-            // SCANNER VIEW (TOP 50%)
+            // SCANNER VIEW (TOP 40%)
             Positioned(
               top: 0,
               left: 0,
@@ -94,9 +151,9 @@ class _HomePageState extends State<HomePage> {
               child: _buildScannerSection(),
             ),
 
-            // BOTTOM PANEL (BOTTOM 50% + OVERLAP)
+            // BOTTOM PANEL (BOTTOM 60% + OVERLAP)
             Positioned(
-              top: (MediaQuery.of(context).size.height * 0.4) - 24, // overlap
+              top: (MediaQuery.of(context).size.height * 0.4) - 24,
               left: 0,
               right: 0,
               bottom: 0,
@@ -134,6 +191,17 @@ class _HomePageState extends State<HomePage> {
           ),
           if (!_isCameraOn) _buildCameraOffState(),
 
+          // Darkened scrim with transparent scan window
+          if (_isCameraOn) _buildScannerScrim(),
+
+          // Scan success flash overlay
+          FadeTransition(
+            opacity: ReverseAnimation(_flashAnimation),
+            child: Container(
+              color: Colors.greenAccent.withValues(alpha: 0.25),
+            ),
+          ),
+
           // Overlay Actions (Top Right)
           Positioned(
             top: MediaQuery.of(context).padding.top + 16,
@@ -151,8 +219,9 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(height: 16),
                 if (_isCameraOn)
                   _buildOverlayButton(
-                    icon:
-                        _isFlashOn ? Icons.flashlight_off : Icons.flashlight_on,
+                    icon: _isFlashOn
+                        ? Icons.flashlight_off
+                        : Icons.flashlight_on,
                     onPressed: () {
                       setState(() => _isFlashOn = !_isFlashOn);
                       _scannerController.toggleTorch();
@@ -161,7 +230,6 @@ class _HomePageState extends State<HomePage> {
                 if (_isCameraOn) const SizedBox(height: 16),
                 _buildOverlayButton(
                   icon: _isCameraOn ? Icons.videocam : Icons.videocam_off,
-                  // color:  Colors.white24 ,
                   onPressed: () {
                     setState(() {
                       _isCameraOn = !_isCameraOn;
@@ -177,16 +245,12 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
 
-          // Central Overlay Bounding Box
+          // Central Overlay Bounding Box with animated scan line
           if (_isCameraOn)
             Center(
-              child: Container(
-                width: 250,
-                height: 250,
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.white24, width: 2),
-                  borderRadius: BorderRadius.circular(16),
-                ),
+              child: SizedBox(
+                width: 240,
+                height: 160,
                 child: Stack(
                   children: [
                     // Corners
@@ -194,6 +258,37 @@ class _HomePageState extends State<HomePage> {
                     _buildCorner(Alignment.topRight),
                     _buildCorner(Alignment.bottomLeft),
                     _buildCorner(Alignment.bottomRight),
+
+                    // Animated scan line
+                    AnimatedBuilder(
+                      animation: _scanLineController,
+                      builder: (context, _) {
+                        return Positioned(
+                          top: _scanLineController.value * 156,
+                          left: 8,
+                          right: 8,
+                          child: Container(
+                            height: 2,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  Colors.transparent,
+                                  Colors.greenAccent.withValues(alpha: 0.9),
+                                  Colors.transparent,
+                                ],
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color:
+                                      Colors.greenAccent.withValues(alpha: 0.5),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -203,9 +298,21 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// Semi-transparent dark scrim that surrounds (but doesn't cover) the scan box.
+  Widget _buildScannerScrim() {
+    const boxW = 240.0;
+    const boxH = 160.0;
+    return IgnorePointer(
+      child: CustomPaint(
+        painter: _ScannerOverlayPainter(boxWidth: boxW, boxHeight: boxH),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+
   Widget _buildCameraOffState() {
     return Container(
-      color: const Color(0xFF1E293B), // slate-800
+      color: const Color(0xFF1E293B),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -213,7 +320,7 @@ class _HomePageState extends State<HomePage> {
             width: 64,
             height: 64,
             decoration: const BoxDecoration(
-              color: Color(0xFF334155), // slate-700
+              color: Color(0xFF334155),
               shape: BoxShape.circle,
             ),
             alignment: Alignment.center,
@@ -242,7 +349,8 @@ class _HomePageState extends State<HomePage> {
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(20)),
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             ),
             icon: const Icon(Icons.videocam),
             label: const Text('Turn on Camera',
@@ -276,30 +384,17 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildCorner(Alignment alignment) {
+    const double size = 28;
+    const double thickness = 3.5;
+    const color = Colors.greenAccent;
+
     return Align(
       alignment: alignment,
-      child: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          border: Border(
-            top: (alignment == Alignment.topLeft ||
-                    alignment == Alignment.topRight)
-                ? const BorderSide(color: Colors.greenAccent, width: 4)
-                : BorderSide.none,
-            bottom: (alignment == Alignment.bottomLeft ||
-                    alignment == Alignment.bottomRight)
-                ? const BorderSide(color: Colors.greenAccent, width: 4)
-                : BorderSide.none,
-            left: (alignment == Alignment.topLeft ||
-                    alignment == Alignment.bottomLeft)
-                ? const BorderSide(color: Colors.greenAccent, width: 4)
-                : BorderSide.none,
-            right: (alignment == Alignment.topRight ||
-                    alignment == Alignment.bottomRight)
-                ? const BorderSide(color: Colors.greenAccent, width: 4)
-                : BorderSide.none,
-          ),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: CustomPaint(
+          painter: _CornerPainter(alignment: alignment, color: color, thickness: thickness),
         ),
       ),
     );
@@ -328,14 +423,14 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
 
-          // Header
+          // Header with animated total
           BlocBuilder<BillingBloc, BillingState>(
             builder: (context, state) {
-              final totalItems =
-                  state.cartItems.fold<int>(0, (sum, i) => sum + i.quantity);
+              final totalItems = state.cartItems
+                  .fold<int>(0, (sum, i) => sum + i.quantity);
               return Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 24, vertical: 8),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -344,7 +439,8 @@ class _HomePageState extends State<HomePage> {
                       children: [
                         const Text('Scanned Items',
                             style: TextStyle(
-                                fontSize: 18, fontWeight: FontWeight.w600)),
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600)),
                         Text('$totalItems items total',
                             style: const TextStyle(
                                 fontSize: 12, color: Colors.grey)),
@@ -359,12 +455,22 @@ class _HomePageState extends State<HomePage> {
                                 fontWeight: FontWeight.bold,
                                 color: Colors.grey,
                                 letterSpacing: 1.2)),
-                        Text(
-                          '₹${state.totalAmount.toStringAsFixed(2)}',
-                          style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
-                              color: Theme.of(context).primaryColor),
+                        TweenAnimationBuilder<double>(
+                          tween: Tween<double>(
+                              begin: 0, end: state.totalAmount),
+                          duration:
+                              const Duration(milliseconds: 350),
+                          curve: Curves.easeOut,
+                          builder: (context, value, _) {
+                            return Text(
+                              '₹${value.toStringAsFixed(2)}',
+                              style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                  color: Theme.of(context)
+                                      .primaryColor),
+                            );
+                          },
                         ),
                       ],
                     ),
@@ -377,27 +483,25 @@ class _HomePageState extends State<HomePage> {
 
           // List View
           Expanded(
-            child: Stack(children: [
-              BlocBuilder<BillingBloc, BillingState>(
-                builder: (context, state) {
-                  if (state.cartItems.isEmpty) {
-                    return _buildEmptyCart();
-                  }
+            child: BlocBuilder<BillingBloc, BillingState>(
+              builder: (context, state) {
+                if (state.cartItems.isEmpty) {
+                  return _buildEmptyCart();
+                }
 
-                  return ListView.separated(
-                    padding: const EdgeInsets.only(
-                        left: 15, right: 15, top: 16, bottom: 100),
-                    itemCount: state.cartItems.length,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(height: 12),
-                    itemBuilder: (context, index) {
-                      final item = state.cartItems[index];
-                      return _buildCartItemCard(context, item);
-                    },
-                  );
-                },
-              ),
-            ]),
+                return ListView.separated(
+                  padding: const EdgeInsets.only(
+                      left: 15, right: 15, top: 16, bottom: 100),
+                  itemCount: state.cartItems.length,
+                  separatorBuilder: (context, index) =>
+                      const SizedBox(height: 12),
+                  itemBuilder: (context, index) {
+                    final item = state.cartItems[index];
+                    return _buildCartItemCard(context, item);
+                  },
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -417,12 +521,13 @@ class _HomePageState extends State<HomePage> {
               shape: BoxShape.circle,
             ),
             alignment: Alignment.center,
-            child:
-                Icon(Icons.shopping_basket, size: 40, color: Colors.grey[300]),
+            child: Icon(Icons.shopping_basket,
+                size: 40, color: Colors.grey[300]),
           ),
           const SizedBox(height: 16),
           const Text('List is empty',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+              style:
+                  TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
           const SizedBox(height: 8),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 40),
@@ -437,17 +542,29 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildCartItemCard(
-    BuildContext context,
-    CartItem item,
-  ) {
-    return Container(
+  Widget _buildCartItemCard(BuildContext context, CartItem item) {
+    final isRecent = _recentlyAddedId == item.product.id;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isRecent
+            ? Colors.green.withValues(alpha: 0.07)
+            : Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[200]!),
-        boxShadow: const [
-          BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))
+        border: Border.all(
+          color: isRecent
+              ? Colors.green.withValues(alpha: 0.4)
+              : Colors.grey[200]!,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: isRecent
+                ? Colors.green.withValues(alpha: 0.12)
+                : Colors.black12,
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          )
         ],
       ),
       padding: const EdgeInsets.all(16),
@@ -490,12 +607,13 @@ class _HomePageState extends State<HomePage> {
                     icon: Icons.remove,
                     onPressed: () {
                       if (item.quantity > 1) {
-                        context.read<BillingBloc>().add(UpdateQuantityEvent(
-                            item.product.id, item.quantity - 1));
+                        context.read<BillingBloc>().add(
+                            UpdateQuantityEvent(
+                                item.product.id, item.quantity - 1));
                       } else {
-                        context
-                            .read<BillingBloc>()
-                            .add(RemoveProductFromCartEvent(item.product.id));
+                        context.read<BillingBloc>().add(
+                            RemoveProductFromCartEvent(
+                                item.product.id));
                       }
                     }),
                 SizedBox(
@@ -503,14 +621,16 @@ class _HomePageState extends State<HomePage> {
                   child: Text(
                     '${item.quantity}',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    style:
+                        const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
                 _circularIconButton(
                     icon: Icons.add,
                     onPressed: () {
-                      context.read<BillingBloc>().add(UpdateQuantityEvent(
-                          item.product.id, item.quantity + 1));
+                      context.read<BillingBloc>().add(
+                          UpdateQuantityEvent(
+                              item.product.id, item.quantity + 1));
                     }),
               ],
             ),
@@ -531,7 +651,75 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
 
-  // A floating Details/Checkout Button at the very bottom
-  // Added a Stack wrapper below to overlay this button
+/// Paints a semi-transparent dark scrim with a transparent rectangular cutout
+/// centred on the screen, to focus attention on the scan area.
+class _ScannerOverlayPainter extends CustomPainter {
+  final double boxWidth;
+  final double boxHeight;
+
+  const _ScannerOverlayPainter(
+      {required this.boxWidth, required this.boxHeight});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scrimPaint = Paint()..color = Colors.black.withValues(alpha: 0.5);
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final rect = Rect.fromCenter(
+        center: Offset(cx, cy), width: boxWidth, height: boxHeight);
+
+    final fullPath = Path()..addRect(Offset.zero & size);
+    final cutout = Path()
+      ..addRRect(RRect.fromRectAndRadius(rect, const Radius.circular(8)));
+    final combined =
+        Path.combine(PathOperation.difference, fullPath, cutout);
+    canvas.drawPath(combined, scrimPaint);
+  }
+
+  @override
+  bool shouldRepaint(_ScannerOverlayPainter old) =>
+      old.boxWidth != boxWidth || old.boxHeight != boxHeight;
+}
+
+/// Paints a single L-shaped corner bracket.
+class _CornerPainter extends CustomPainter {
+  final Alignment alignment;
+  final Color color;
+  final double thickness;
+
+  const _CornerPainter(
+      {required this.alignment,
+      required this.color,
+      required this.thickness});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = thickness
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    final double len = size.width * 0.7;
+    final bool isLeft = alignment == Alignment.topLeft ||
+        alignment == Alignment.bottomLeft;
+    final bool isTop =
+        alignment == Alignment.topLeft || alignment == Alignment.topRight;
+
+    final double x0 = isLeft ? 0 : size.width;
+    final double y0 = isTop ? 0 : size.height;
+    final double x1 = isLeft ? len : size.width - len;
+    final double y1 = isTop ? len : size.height - len;
+
+    canvas.drawLine(Offset(x0, y0), Offset(x1, y0), paint); // horizontal
+    canvas.drawLine(Offset(x0, y0), Offset(x0, y1), paint); // vertical
+  }
+
+  @override
+  bool shouldRepaint(_CornerPainter old) =>
+      old.alignment != alignment ||
+      old.color != color ||
+      old.thickness != thickness;
 }
